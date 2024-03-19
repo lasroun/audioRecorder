@@ -1,117 +1,182 @@
 <!DOCTYPE html>
+
 <html>
 <head>
     <meta charset="utf-8" />
-    <title>Audio Recorder with Deletion Option</title>
-    <style>
-        #status {
-            margin-top: 10px;
-        }
-        .hidden {
-            display: none;
-        }
-    </style>
+    <title></title>
 </head>
 <body>
-    <h1>Audio Recorder</h1>
+    <h1>Audio</h1>
 
-    <button id="startRecordingButton">Start Recording</button>
-    <button id="stopRecordingButton" class="hidden">Stop Recording</button>
-    <button id="playButton" class="hidden">Play</button>
-    <button id="downloadButton" class="hidden">Download</button>
-    <button id="deleteButton" class="hidden">Delete Recording</button>
-    <div id="status" class="hidden">Recording time: <span id="time">0</span> seconds</div>
+    <button id="startRecordingButton">Start recording</button>
+    <button id="stopRecordingButton">Stop recording</button>
+    <button id="playButton">Play</button>
+    <button id="downloadButton">Download</button>
 
     <script>
-        let startRecordingButton = document.getElementById("startRecordingButton");
-        let stopRecordingButton = document.getElementById("stopRecordingButton");
-        let playButton = document.getElementById("playButton");
-        let downloadButton = document.getElementById("downloadButton");
-        let deleteButton = document.getElementById("deleteButton");
-        let status = document.getElementById("status");
-        let timeDisplay = document.getElementById("time");
+        var startRecordingButton = document.getElementById("startRecordingButton");
+        var stopRecordingButton = document.getElementById("stopRecordingButton");
+        var playButton = document.getElementById("playButton");
+        var downloadButton = document.getElementById("downloadButton");
 
-        let recorder, stream;
-        let recordingLength = 0;
-        let audioBlob = null;
-        let recordingInterval;
 
-        async function startRecording() {
-            stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-            const audioContext = new (window.AudioContext || window.webkitAudioContext)();
-            const input = audioContext.createMediaStreamSource(stream);
+        var leftchannel = [];
+        var rightchannel = [];
+        var recorder = null;
+        var recordingLength = 0;
+        var volume = null;
+        var mediaStream = null;
+        var sampleRate = 44100;
+        var context = null;
+        var blob = null;
 
-            recorder = audioContext.createScriptProcessor(2048, 1, 1);
+        startRecordingButton.addEventListener("click", function () {
+            // Initialize recorder
+            navigator.getUserMedia = navigator.getUserMedia || navigator.webkitGetUserMedia || navigator.mozGetUserMedia || navigator.msGetUserMedia;
+            navigator.getUserMedia(
+            {
+                audio: true
+            },
+            function (e) {
+                console.log("user consent");
 
-            input.connect(recorder);
-            recorder.connect(audioContext.destination);
+                // creates the audio context
+                window.AudioContext = window.AudioContext || window.webkitAudioContext;
+                context = new AudioContext();
 
-            recorder.onaudioprocess = function (e) {
-                if (!stream.active) return;
-                // Add real audio data handling here
-            };
+                // creates an audio node from the microphone incoming stream
+                mediaStream = context.createMediaStreamSource(e);
 
-            startRecordingButton.classList.add('hidden');
-            stopRecordingButton.classList.remove('hidden');
-            status.classList.remove('hidden');
-            playButton.classList.add('hidden');
-            downloadButton.classList.add('hidden');
-            deleteButton.classList.add('hidden');
+                // https://developer.mozilla.org/en-US/docs/Web/API/AudioContext/createScriptProcessor
+                // bufferSize: the onaudioprocess event is called when the buffer is full
+                var bufferSize = 2048;
+                var numberOfInputChannels = 2;
+                var numberOfOutputChannels = 2;
+                if (context.createScriptProcessor) {
+                    recorder = context.createScriptProcessor(bufferSize, numberOfInputChannels, numberOfOutputChannels);
+                } else {
+                    recorder = context.createJavaScriptNode(bufferSize, numberOfInputChannels, numberOfOutputChannels);
+                }
 
-            recordingLength = 0;
-            recordingInterval = setInterval(() => {
-                recordingLength++;
-                timeDisplay.textContent = recordingLength;
-            }, 1000);
-        }
+                recorder.onaudioprocess = function (e) {
+                    leftchannel.push(new Float32Array(e.inputBuffer.getChannelData(0)));
+                    rightchannel.push(new Float32Array(e.inputBuffer.getChannelData(1)));
+                    recordingLength += bufferSize;
+                }
 
-        function stopRecording() {
-            clearInterval(recordingInterval);
-            recorder.disconnect();
-            stream.getTracks().forEach(track => track.stop());
+                // we connect the recorder
+                mediaStream.connect(recorder);
+                recorder.connect(context.destination);
+            },
+                        function (e) {
+                            console.error(e);
+                        });
+        });
 
-            // Assume we create a blob from the recorded data
-            audioBlob = new Blob(["AUDIO DATA"], { type: 'audio/wav' });
+        stopRecordingButton.addEventListener("click", function () {
 
-            startRecordingButton.classList.remove('hidden');
-            stopRecordingButton.classList.add('hidden');
-            playButton.classList.remove('hidden');
-            downloadButton.classList.remove('hidden');
-            deleteButton.classList.remove('hidden');
-            status.classList.add('hidden');
-        }
+            // stop recording
+            recorder.disconnect(context.destination);
+            mediaStream.disconnect(recorder);
 
-        function deleteRecording() {
-            audioBlob = null;
-            playButton.classList.add('hidden');
-            downloadButton.classList.add('hidden');
-            deleteButton.classList.add('hidden');
-            timeDisplay.textContent = "0";
-            alert("Recording deleted.");
-        }
+            // we flat the left and right channels down
+            // Float32Array[] => Float32Array
+            var leftBuffer = flattenArray(leftchannel, recordingLength);
+            var rightBuffer = flattenArray(rightchannel, recordingLength);
+            // we interleave both channels together
+            // [left[0],right[0],left[1],right[1],...]
+            var interleaved = interleave(leftBuffer, rightBuffer);
 
-        startRecordingButton.addEventListener("click", startRecording);
-        stopRecordingButton.addEventListener("click", stopRecording);
-        deleteButton.addEventListener("click", deleteRecording);
+            // we create our wav file
+            var buffer = new ArrayBuffer(44 + interleaved.length * 2);
+            var view = new DataView(buffer);
+
+            // RIFF chunk descriptor
+            writeUTFBytes(view, 0, 'RIFF');
+            view.setUint32(4, 44 + interleaved.length * 2, true);
+            writeUTFBytes(view, 8, 'WAVE');
+            // FMT sub-chunk
+            writeUTFBytes(view, 12, 'fmt ');
+            view.setUint32(16, 16, true); // chunkSize
+            view.setUint16(20, 1, true); // wFormatTag
+            view.setUint16(22, 2, true); // wChannels: stereo (2 channels)
+            view.setUint32(24, sampleRate, true); // dwSamplesPerSec
+            view.setUint32(28, sampleRate * 4, true); // dwAvgBytesPerSec
+            view.setUint16(32, 4, true); // wBlockAlign
+            view.setUint16(34, 16, true); // wBitsPerSample
+            // data sub-chunk
+            writeUTFBytes(view, 36, 'data');
+            view.setUint32(40, interleaved.length * 2, true);
+
+            // write the PCM samples
+            var index = 44;
+            var volume = 1;
+            for (var i = 0; i < interleaved.length; i++) {
+                view.setInt16(index, interleaved[i] * (0x7FFF * volume), true);
+                index += 2;
+            }
+
+            // our final blob
+            blob = new Blob([view], { type: 'audio/wav' });
+        });
 
         playButton.addEventListener("click", function () {
-            if (!audioBlob) return;
-            const audioUrl = URL.createObjectURL(audioBlob);
-            const audio = new Audio(audioUrl);
+            if (blob == null) {
+                return;
+            }
+
+            var url = window.URL.createObjectURL(blob);
+            var audio = new Audio(url);
             audio.play();
         });
 
         downloadButton.addEventListener("click", function () {
-            if (!audioBlob) return;
-            const url = URL.createObjectURL(audioBlob);
-            const a = document.createElement("a");
+            if (blob == null) {
+                return;
+            }
+
+            var url = URL.createObjectURL(blob);
+
+            var a = document.createElement("a");
             document.body.appendChild(a);
             a.style = "display: none";
             a.href = url;
-            a.download = "recording.wav";
+            a.download = "sample.wav";
             a.click();
             window.URL.revokeObjectURL(url);
         });
+
+        function flattenArray(channelBuffer, recordingLength) {
+            var result = new Float32Array(recordingLength);
+            var offset = 0;
+            for (var i = 0; i < channelBuffer.length; i++) {
+                var buffer = channelBuffer[i];
+                result.set(buffer, offset);
+                offset += buffer.length;
+            }
+            return result;
+        }
+
+        function interleave(leftChannel, rightChannel) {
+            var length = leftChannel.length + rightChannel.length;
+            var result = new Float32Array(length);
+
+            var inputIndex = 0;
+
+            for (var index = 0; index < length;) {
+                result[index++] = leftChannel[inputIndex];
+                result[index++] = rightChannel[inputIndex];
+                inputIndex++;
+            }
+            return result;
+        }
+
+        function writeUTFBytes(view, offset, string) {
+            for (var i = 0; i < string.length; i++) {
+                view.setUint8(offset + i, string.charCodeAt(i));
+            }
+        }
+
     </script>
 </body>
 </html>
