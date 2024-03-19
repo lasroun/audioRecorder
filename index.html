@@ -1,0 +1,117 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8" />
+    <title>Audio Recorder with Deletion Option</title>
+    <style>
+        #status {
+            margin-top: 10px;
+        }
+        .hidden {
+            display: none;
+        }
+    </style>
+</head>
+<body>
+    <h1>Audio Recorder</h1>
+
+    <button id="startRecordingButton">Start Recording</button>
+    <button id="stopRecordingButton" class="hidden">Stop Recording</button>
+    <button id="playButton" class="hidden">Play</button>
+    <button id="downloadButton" class="hidden">Download</button>
+    <button id="deleteButton" class="hidden">Delete Recording</button>
+    <div id="status" class="hidden">Recording time: <span id="time">0</span> seconds</div>
+
+    <script>
+        let startRecordingButton = document.getElementById("startRecordingButton");
+        let stopRecordingButton = document.getElementById("stopRecordingButton");
+        let playButton = document.getElementById("playButton");
+        let downloadButton = document.getElementById("downloadButton");
+        let deleteButton = document.getElementById("deleteButton");
+        let status = document.getElementById("status");
+        let timeDisplay = document.getElementById("time");
+
+        let recorder, stream;
+        let recordingLength = 0;
+        let audioBlob = null;
+        let recordingInterval;
+
+        async function startRecording() {
+            stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+            const audioContext = new (window.AudioContext || window.webkitAudioContext)();
+            const input = audioContext.createMediaStreamSource(stream);
+
+            recorder = audioContext.createScriptProcessor(2048, 1, 1);
+
+            input.connect(recorder);
+            recorder.connect(audioContext.destination);
+
+            recorder.onaudioprocess = function (e) {
+                if (!stream.active) return;
+                // Add real audio data handling here
+            };
+
+            startRecordingButton.classList.add('hidden');
+            stopRecordingButton.classList.remove('hidden');
+            status.classList.remove('hidden');
+            playButton.classList.add('hidden');
+            downloadButton.classList.add('hidden');
+            deleteButton.classList.add('hidden');
+
+            recordingLength = 0;
+            recordingInterval = setInterval(() => {
+                recordingLength++;
+                timeDisplay.textContent = recordingLength;
+            }, 1000);
+        }
+
+        function stopRecording() {
+            clearInterval(recordingInterval);
+            recorder.disconnect();
+            stream.getTracks().forEach(track => track.stop());
+
+            // Assume we create a blob from the recorded data
+            audioBlob = new Blob(["AUDIO DATA"], { type: 'audio/wav' });
+
+            startRecordingButton.classList.remove('hidden');
+            stopRecordingButton.classList.add('hidden');
+            playButton.classList.remove('hidden');
+            downloadButton.classList.remove('hidden');
+            deleteButton.classList.remove('hidden');
+            status.classList.add('hidden');
+        }
+
+        function deleteRecording() {
+            audioBlob = null;
+            playButton.classList.add('hidden');
+            downloadButton.classList.add('hidden');
+            deleteButton.classList.add('hidden');
+            timeDisplay.textContent = "0";
+            alert("Recording deleted.");
+        }
+
+        startRecordingButton.addEventListener("click", startRecording);
+        stopRecordingButton.addEventListener("click", stopRecording);
+        deleteButton.addEventListener("click", deleteRecording);
+
+        playButton.addEventListener("click", function () {
+            if (!audioBlob) return;
+            const audioUrl = URL.createObjectURL(audioBlob);
+            const audio = new Audio(audioUrl);
+            audio.play();
+        });
+
+        downloadButton.addEventListener("click", function () {
+            if (!audioBlob) return;
+            const url = URL.createObjectURL(audioBlob);
+            const a = document.createElement("a");
+            document.body.appendChild(a);
+            a.style = "display: none";
+            a.href = url;
+            a.download = "recording.wav";
+            a.click();
+            window.URL.revokeObjectURL(url);
+        });
+    </script>
+</body>
+</html>
